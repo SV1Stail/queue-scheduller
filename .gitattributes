@@ -1,0 +1,16 @@
+# lf end of file
+* text=auto eol=lf
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
