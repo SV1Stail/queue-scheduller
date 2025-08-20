@@ -1,0 +1,20 @@
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - staticcheck
+    - gosimple
+    - unused
+    - ineffassign
+    - revive
+    - gocyclo
+    - dupl
+    - prealloc
+    - gocritic
+    - misspell
+    - whitespace
+  disable:
+    - errcheck
