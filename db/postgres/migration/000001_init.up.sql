@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS posts (
     "data" JSONB NOT NULL,
     "status" post_status NOT NULL,
     "publish_at" TIMESTAMP DEFAULT NOW() NOT NULL,
-    "created_time" TIMESTAMP DEFAULT NOW() NOT NULL,
-    "updated_time" TIMESTAMP DEFAULT NOW() NOT NULL,
+    "created_at" TIMESTAMP DEFAULT NOW() NOT NULL,
+    "updated_at" TIMESTAMP DEFAULT NOW() NOT NULL,
     "attempts" INT DEFAULT 0 NOT NULL CHECK("attempts" >= 0)
 );
 
