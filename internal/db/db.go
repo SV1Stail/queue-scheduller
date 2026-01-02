@@ -13,7 +13,6 @@ import (
 
 type DB struct {
 	pool *pgxpool.Pool
-	// mu   *sync.Mutex
 }
 
 type Post struct {
@@ -90,6 +89,45 @@ func (db *DB) CreatePostTx(ctx context.Context, tx pgx.Tx, in *CreatePostRequest
 	return nil
 }
 
+type CreatePostSomeChannelsRequest struct {
+	IDs             []string
+	PublishChannels []string
+	Data            *PostData
+	PublishAt       *timestamp.Timestamp
+}
+
+func (db *DB) CreatePostSomeChannelsTx(ctx context.Context, tx pgx.Tx, in *CreatePostSomeChannelsRequest) error {
+	if in == nil ||
+		in.Data == nil ||
+		in.PublishAt == nil ||
+		len(in.IDs) == 0 ||
+		len(in.PublishChannels) == 0 {
+		return errBadRequest
+	}
+
+	dataJSONB, err := json.Marshal(in.Data)
+	if err != nil {
+		return err
+	}
+
+	query := `
+	INSERT INTO posts (
+		"id", "publish_channel", "data",
+		"status", "publish_at", "created_at", "updated_at"
+	) VALUES (unnest($1), unnest($2) ,$3 ,$4 ,$5 ,$6 ,$7)
+	`
+	timeNow := time.Now()
+	_, err = tx.Exec(ctx, query, in.IDs,
+		in.PublishChannels, dataJSONB, PostStatusScheduled,
+		in.PublishAt.AsTime(), timeNow, timeNow,
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 type GetPostRequest struct {
 	ID string
 }
@@ -113,6 +151,36 @@ func (db *DB) GetPostTx(ctx context.Context, tx pgx.Tx, in *GetPostRequest) (*Po
 	}
 
 	return post, nil
+}
+
+type GetPostsForChannelRequest struct {
+	PublishChannel string
+}
+
+func (db *DB) GetPostsForChannelTx(ctx context.Context, tx pgx.Tx, in *GetPostsForChannelRequest) ([]*Post, error) {
+	if in.PublishChannel == "" {
+		return nil, errBadRequest
+	}
+
+	query := `
+	SELECT 
+		"id", "publish_channel", "data",
+		"status", "publish_at", "created_at", 
+		"updated_at", "attempts"
+	FROM post
+	WHERE "publish_channel" = $1
+	`
+	rows, err := tx.Query(ctx, query, in.PublishChannel)
+	if err != nil {
+		return nil, err
+	}
+
+	posts, err := scanPosts(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	return posts, nil
 }
 
 type UpdatePostRequest struct {
@@ -161,7 +229,7 @@ func (db *DB) DeletePostTx(ctx context.Context, tx pgx.Tx, in *DeletePostRequest
 
 	query := `
 	DELETE FROM post 
-	WHERE id = $1
+	WHERE "id" = $1
 	`
 	_, err := tx.Exec(ctx, query, in.ID)
 	if err != nil {

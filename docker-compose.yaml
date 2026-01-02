@@ -1,0 +1,15 @@
+services:
+  queue-sheduler:
+    build: 
+      context: .
+      dockerfile: build/docker/Dockerfile
+    restart: always
+    ports:
+      - 5090:8090
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "nc 0:8090 </dev/null >/dev/null"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+      start_period: 5s
+
