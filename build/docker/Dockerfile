@@ -6,6 +6,6 @@ ADD ../ ./
 
 RUN go mod download
 
-RUN go build -o /bin/queue-scheduler /app/main.go
+RUN go build -o /bin/queue-scheduler /app/cmd/main.go
 
 ENTRYPOINT ["/bin/queue-scheduler"]

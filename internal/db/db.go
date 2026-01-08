@@ -33,7 +33,7 @@ type PostData struct {
 }
 
 func (db *DB) WrapWithTransAction(ctx context.Context, fn func(tx pgx.Tx) error) error {
-	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		log.Default().Println("tx begin failed")
 		return err
@@ -89,6 +89,154 @@ func (db *DB) CreatePostTx(ctx context.Context, tx pgx.Tx, in *CreatePostRequest
 	return nil
 }
 
+type GetPostRequest struct {
+	ID string
+}
+
+func (db *DB) GetPostTx(ctx context.Context, tx pgx.Tx, in *GetPostRequest) (*Post, error) {
+	if in == nil {
+		return nil, errBadRequest
+	}
+
+	query := `
+	SELECT 
+		"id", "publish_channel", "data",
+		"status", "publish_at", "created_at", 
+		"updated_at", "attempts"
+	FROM post
+	WHERE "id" = $1
+	`
+	post, err := scanPost(tx.QueryRow(ctx, query, in.ID))
+	if err != nil {
+		return nil, err
+	}
+
+	return post, nil
+}
+
+type UpdatePostRequest struct {
+	ID             string
+	PublishChannel string
+	Data           *PostData
+	PublishAt      *timestamp.Timestamp
+}
+
+func (db *DB) UpdatePostTx(ctx context.Context, tx pgx.Tx, in *UpdatePostRequest) error {
+	if in == nil || in.Data == nil || in.PublishAt == nil {
+		return errBadRequest
+	}
+
+	dataJSONB, err := json.Marshal(in.Data)
+	if err != nil {
+		return err
+	}
+
+	query := `
+	UPDATE posts 
+	SET 
+		"publish_channel" = $1, 
+		"data" = $2,
+		"publish_at" = $3 , 
+		"updated_at" = NOW()
+	WHERE "id" = $4
+	`
+	_, err = tx.Exec(ctx, query, in.PublishChannel, dataJSONB,
+		in.PublishAt.AsTime(), in.ID)
+
+	if err != nil {
+		return err
+	}
+
+	return nil
+
+}
+
+type DeletePostRequest struct {
+	ID string
+}
+
+func (db *DB) DeletePostByIDTx(ctx context.Context, tx pgx.Tx, in *DeletePostRequest) error {
+	if in == nil {
+		return errBadRequest
+	}
+
+	query := `
+	UPDATE post 
+	SET 
+		status = 'DONE'
+		updated_at = Now()
+	WHERE "id" = $1
+	`
+	_, err := tx.Exec(ctx, query, in.ID)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DB) ClearTx(ctx context.Context, tx pgx.Tx) error {
+	query := `
+	WITH deleted AS (
+		DELETE FROM post
+		WHERE status = 'DONE'::text::task_state
+		LIMIT $1
+	)
+	SELECT COUNT(*) AS deleted_count
+	FROM deleted
+	`
+
+	clearLimit := 100
+	clearedNumber := -1
+
+	row := tx.QueryRow(ctx, query, clearLimit)
+	err := row.Scan(&clearedNumber)
+	if err != nil {
+		return err
+	}
+
+	log.Default().Printf("cleared number %d", clearedNumber)
+
+	return nil
+}
+
+func (db *DB) PublishTx(ctx context.Context, tx pgx.Tx) ([]*Post, error) {
+	query := `
+	UPDATE post
+	SET
+		state = 'PUBLISHING'
+		updated_at = Now()
+	WHERE id IN (
+		SELECT id 
+		FROM post
+		WHERE
+			state = 'SCHEDULED'  
+			AND run_at < NOW()
+		LIMIT $1
+		FOR UPDATE SKIP LOCKED
+	)
+	RETURNING 
+		id, publish_channel, data,
+		status, publish_at, created_at,
+		updated_at, attempts
+	`
+	readyLimit := 100
+
+	rows, err := tx.Query(ctx, query, readyLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	posts, err := scanPosts(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// log.Default().Printf("affected rows %d", ok.RowsAffected())
+
+	return posts, nil
+}
+
 type CreatePostSomeChannelsRequest struct {
 	IDs             []string
 	PublishChannels []string
@@ -128,31 +276,6 @@ func (db *DB) CreatePostSomeChannelsTx(ctx context.Context, tx pgx.Tx, in *Creat
 	return nil
 }
 
-type GetPostRequest struct {
-	ID string
-}
-
-func (db *DB) GetPostTx(ctx context.Context, tx pgx.Tx, in *GetPostRequest) (*Post, error) {
-	if in == nil {
-		return nil, errBadRequest
-	}
-
-	query := `
-	SELECT 
-		"id", "publish_channel", "data",
-		"status", "publish_at", "created_at", 
-		"updated_at", "attempts"
-	FROM post
-	WHERE "id" = $1
-	`
-	post, err := scanPost(tx.QueryRow(ctx, query, in.ID))
-	if err != nil {
-		return nil, err
-	}
-
-	return post, nil
-}
-
 type GetPostsForChannelRequest struct {
 	PublishChannel string
 }
@@ -163,9 +286,9 @@ func (db *DB) GetPostsForChannelTx(ctx context.Context, tx pgx.Tx, in *GetPostsF
 	}
 
 	query := `
-	SELECT 
+	SELECT
 		"id", "publish_channel", "data",
-		"status", "publish_at", "created_at", 
+		"status", "publish_at", "created_at",
 		"updated_at", "attempts"
 	FROM post
 	WHERE "publish_channel" = $1
@@ -183,53 +306,21 @@ func (db *DB) GetPostsForChannelTx(ctx context.Context, tx pgx.Tx, in *GetPostsF
 	return posts, nil
 }
 
-type UpdatePostRequest struct {
-	ID             string
-	PublishChannel string
-	Data           *PostData
-	PublishAt      *timestamp.Timestamp
-}
-
-func (db *DB) UpdatePostTx(ctx context.Context, tx pgx.Tx, in *UpdatePostRequest) error {
-	if in == nil || in.Data == nil || in.PublishAt == nil {
-		return errBadRequest
-	}
-
-	dataJSONB, err := json.Marshal(in.Data)
-	if err != nil {
-		return err
-	}
-
-	query := `
-	UPDATE posts 
-	SET 
-		"publish_channel" = $1, "data" = $2,
-		"publish_at" = $3 , "updated_at" = NOW()
-	WHERE "id" = $4
-	`
-	_, err = tx.Exec(ctx, query, in.PublishChannel, dataJSONB,
-		in.PublishAt.AsTime(), in.ID)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-
-}
-
-type DeletePostRequest struct {
+type RescheduleRequest struct {
 	ID string
 }
 
-func (db *DB) DeletePostTx(ctx context.Context, tx pgx.Tx, in *DeletePostRequest) error {
-	if in == nil {
-		return errBadRequest
-	}
-
+func (db *DB) RescheduleTx(ctx context.Context, tx pgx.Tx, in *RescheduleRequest) error {
 	query := `
-	DELETE FROM post 
-	WHERE "id" = $1
+	UPDATE post
+	SET 
+		status = CASE
+			WHEN attempts >= 3 THEN 'FAILED'
+			ELSE 'SCHEDULED'
+		END,
+		attempts = attempts + 1
+		updated_at = Now()
+	WHERE id = $1
 	`
 	_, err := tx.Exec(ctx, query, in.ID)
 	if err != nil {
