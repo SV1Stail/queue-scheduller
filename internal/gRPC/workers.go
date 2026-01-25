@@ -13,21 +13,28 @@ import (
 	"github.com/mbranch/safe-go"
 )
 
-func (qs *QueueScheduler) workers() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func (qs *QueueScheduler) Workers(ctx context.Context) {
+	// ctx, cancel := context.WithCancel(context.Background())
+	// defer cancel()
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	// доделать graceful shutdown
 
-	go qs.worker(ctx, 5*time.Second, qs.ClearJob)
-	go qs.worker(ctx, 5*time.Second, qs.ReadyPublish)
+	go qs.worker(ctx, &wg, 5*time.Second, qs.ClearJob)
+	go qs.worker(ctx, &wg, 5*time.Second, qs.ReadyPublish)
 
+	wg.Wait()
 }
 
 func (qs *QueueScheduler) worker(ctx context.Context,
+	wg *sync.WaitGroup,
 	timeDur time.Duration,
 	job func(context.Context) error,
 ) {
 	timer := time.NewTimer(timeDur)
 	defer timer.Stop()
+	defer wg.Done()
+	// доделать graceful shutdown
 	for {
 		select {
 		case <-qs.stopCh:
@@ -93,6 +100,7 @@ func (qs *QueueScheduler) ReadyPublish(ctx context.Context) error {
 				PublishAt:      post.PublishAt,
 			})
 			if err != nil {
+				// reschedule if post failed
 				err := qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) error {
 					return qs.DB.RescheduleTx(ctx, tx, &db.RescheduleRequest{
 						ID: post.ID,
@@ -107,6 +115,7 @@ func (qs *QueueScheduler) ReadyPublish(ctx context.Context) error {
 				return
 			}
 
+			// delete if post ok
 			err = qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) error {
 				return qs.DB.DeletePostByIDTx(ctx, tx, &db.DeletePostRequest{
 					ID: resp.GetId(),
