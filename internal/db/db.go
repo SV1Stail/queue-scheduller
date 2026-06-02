@@ -6,13 +6,39 @@ import (
 	"log"
 	"time"
 
+	queue_scheduler_pb "github.com/SV1Stail/tg-project-protos/gen/go/queue_scheduler/queue_scheduler"
 	"github.com/golang/protobuf/ptypes/timestamp"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type DB struct {
 	pool *pgxpool.Pool
+}
+
+// TODO: add config
+func MustNewDB(ctx context.Context) *DB {
+	config, err := pgxpool.ParseConfig("postgres://postgres:postgres@localhost:5432/queue?sslmode=disable")
+	if err != nil {
+		panic(err)
+	}
+	config.MaxConns = 10
+	config.MinConns = 2
+	config.MaxConnIdleTime = 5 * time.Minute
+	config.HealthCheckPeriod = 1 * time.Minute
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		panic(err)
+	}
+
+	return &DB{pool: pool}
+}
+
+func (db *DB) Close() {
+	db.pool.Close()
 }
 
 type Post struct {
@@ -21,15 +47,15 @@ type Post struct {
 	Data           *PostData            `json:"data,omitempty"`
 	Status         PostStatus           `json:"status,omitempty"`
 	PublishAt      *timestamp.Timestamp `json:"publish_at"`
-	CreatedAt      time.Time            `json:"created_at"`
-	UpdatedAt      time.Time            `json:"updated_at"`
+	CreatedAt      *timestamp.Timestamp `json:"created_at"`
+	UpdatedAt      *timestamp.Timestamp `json:"updated_at"`
 	Attempts       int32                `json:"attempts"`
 }
 
 type PostData struct {
-	Title   string `json:"title,omitempty"`
-	Body    string `json:"body,omitempty"`
-	PostUrl string `json:"urls,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Body      string   `json:"body,omitempty"`
+	PostsUrls []string `json:"posts_urls,omitempty"`
 }
 
 func (db *DB) WrapWithTransAction(ctx context.Context, fn func(tx pgx.Tx) error) error {
@@ -55,45 +81,53 @@ func (db *DB) WrapWithTransAction(ctx context.Context, fn func(tx pgx.Tx) error)
 }
 
 type CreatePostRequest struct {
-	ID             string
 	PublishChannel string
 	Data           *PostData
 	PublishAt      *timestamp.Timestamp
 }
 
-func (db *DB) CreatePostTx(ctx context.Context, tx pgx.Tx, in *CreatePostRequest) error {
-	if in == nil || in.Data == nil || in.PublishAt == nil {
-		return errBadRequest
-	}
-
+func (db *DB) CreatePost(ctx context.Context, in *CreatePostRequest) (*queue_scheduler_pb.Post, error) {
 	dataJSONB, err := json.Marshal(in.Data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	generatedID := uuid.NewString()
 	timeNow := time.Now()
 	query := `
 	INSERT INTO posts (
 		"id", "publish_channel", "data",
 		"status", "publish_at", "created_at", "updated_at"
-	) VALUES ($1, $2 ,$3 ,$4 ,$5 ,$6 ,$7)
+	) VALUES ($1, $2 ,$3 ,$4 ,$5, $6, $7)
 	`
-	_, err = tx.Exec(ctx, query, in.ID,
+	_, err = db.pool.Exec(ctx, query, generatedID,
 		in.PublishChannel, dataJSONB, PostStatusScheduled,
 		in.PublishAt.AsTime(), timeNow, timeNow,
 	)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &queue_scheduler_pb.Post{
+		Id:             generatedID,
+		PublishChannel: in.PublishChannel,
+		Data: &queue_scheduler_pb.PublishPostData{
+			Title:   in.Data.Title,
+			Body:    in.Data.Body,
+			PostUrl: in.Data.PostsUrls,
+		},
+		PublishAt: in.PublishAt,
+		CreatedAt: timestamppb.New(timeNow),
+		UpdatedAt: timestamppb.New(timeNow),
+		// ImagesUrls: []string{},
+	}, nil
 }
 
 type GetPostRequest struct {
 	ID string
 }
 
-func (db *DB) GetPostTx(ctx context.Context, tx pgx.Tx, in *GetPostRequest) (*Post, error) {
+func (db *DB) GetPost(ctx context.Context, in *GetPostRequest) (*queue_scheduler_pb.Post, error) {
 	if in == nil {
 		return nil, errBadRequest
 	}
@@ -106,12 +140,24 @@ func (db *DB) GetPostTx(ctx context.Context, tx pgx.Tx, in *GetPostRequest) (*Po
 	FROM post
 	WHERE "id" = $1
 	`
-	post, err := scanPost(tx.QueryRow(ctx, query, in.ID))
+	post, err := scanPost(db.pool.QueryRow(ctx, query, in.ID))
 	if err != nil {
 		return nil, err
 	}
 
-	return post, nil
+	return &queue_scheduler_pb.Post{
+		Id:             post.ID,
+		PublishChannel: post.PublishChannel,
+		Data: &queue_scheduler_pb.PublishPostData{
+			Title:   post.Data.Title,
+			Body:    post.Data.Body,
+			PostUrl: post.Data.PostsUrls,
+		},
+		PublishAt: post.PublishAt,
+		CreatedAt: post.CreatedAt,
+		UpdatedAt: post.UpdatedAt,
+		// ImagesUrls: []string{},
+	}, nil
 }
 
 type UpdatePostRequest struct {
@@ -121,33 +167,46 @@ type UpdatePostRequest struct {
 	PublishAt      *timestamp.Timestamp
 }
 
-func (db *DB) UpdatePostTx(ctx context.Context, tx pgx.Tx, in *UpdatePostRequest) error {
+func (db *DB) UpdatePost(ctx context.Context, in *UpdatePostRequest) (*queue_scheduler_pb.Post, error) {
 	if in == nil || in.Data == nil || in.PublishAt == nil {
-		return errBadRequest
+		return nil, errBadRequest
 	}
 
 	dataJSONB, err := json.Marshal(in.Data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	timeNow := time.Now()
+	// TODO: обновлять только не пустые поля
 	query := `
 	UPDATE posts 
 	SET 
 		"publish_channel" = $1, 
 		"data" = $2,
 		"publish_at" = $3 , 
-		"updated_at" = NOW()
-	WHERE "id" = $4
+		"updated_at" = $4
+	WHERE "id" = $5
 	`
-	_, err = tx.Exec(ctx, query, in.PublishChannel, dataJSONB,
-		in.PublishAt.AsTime(), in.ID)
+	_, err = db.pool.Exec(ctx, query, in.PublishChannel, dataJSONB,
+		in.PublishAt.AsTime(), timeNow, in.ID)
 
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &queue_scheduler_pb.Post{
+		Id:             in.ID,
+		PublishChannel: in.PublishChannel,
+		Data: &queue_scheduler_pb.PublishPostData{
+			Title:   in.Data.Title,
+			Body:    in.Data.Body,
+			PostUrl: in.Data.PostsUrls,
+		},
+		PublishAt: in.PublishAt,
+		UpdatedAt: timestamppb.New(timeNow),
+		// ImagesUrls: []string{},
+	}, nil
 
 }
 
@@ -155,7 +214,7 @@ type DeletePostRequest struct {
 	ID string
 }
 
-func (db *DB) DeletePostByIDTx(ctx context.Context, tx pgx.Tx, in *DeletePostRequest) error {
+func (db *DB) DeletePostByID(ctx context.Context, in *DeletePostRequest) error {
 	if in == nil {
 		return errBadRequest
 	}
@@ -167,7 +226,7 @@ func (db *DB) DeletePostByIDTx(ctx context.Context, tx pgx.Tx, in *DeletePostReq
 		updated_at = Now()
 	WHERE "id" = $1
 	`
-	_, err := tx.Exec(ctx, query, in.ID)
+	_, err := db.pool.Exec(ctx, query, in.ID)
 	if err != nil {
 		return err
 	}

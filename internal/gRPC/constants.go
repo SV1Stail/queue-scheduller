@@ -12,5 +12,5 @@ var (
 )
 
 var (
-	contextTimeOut time.Duration = 2 * time.Second
+	contextTimeOut time.Duration = 5 * time.Second
 )

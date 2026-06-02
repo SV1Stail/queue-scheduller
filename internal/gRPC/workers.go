@@ -7,8 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/SV1Stail/queue-scheduller/internal/db"
-	publisher_pb "github.com/SV1Stail/tg-project-protos/gen/go/publisher"
 	"github.com/jackc/pgx/v5"
 	"github.com/mbranch/safe-go"
 )
@@ -21,7 +19,7 @@ func (qs *QueueScheduler) Workers(ctx context.Context) {
 	// доделать graceful shutdown
 
 	go qs.worker(ctx, &wg, 5*time.Second, qs.ClearJob)
-	go qs.worker(ctx, &wg, 5*time.Second, qs.ReadyPublish)
+	// go qs.worker(ctx, &wg, 5*time.Second, qs.ReadyPublish)
 
 	wg.Wait()
 }
@@ -66,84 +64,84 @@ func (qs *QueueScheduler) ClearJob(ctx context.Context) error {
 	return err
 }
 
-func (qs *QueueScheduler) ReadyPublish(ctx context.Context) error {
-	var posts []*db.Post
-	err := qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) (err error) {
-		posts, err = qs.DB.PublishTx(ctx, tx)
-		if err != nil {
-			return err
-		}
+// func (qs *QueueScheduler) ReadyPublish(ctx context.Context) error {
+// 	var posts []*db.Post
+// 	err := qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) (err error) {
+// 		posts, err = qs.DB.PublishTx(ctx, tx)
+// 		if err != nil {
+// 			return err
+// 		}
 
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+// 		return nil
+// 	})
+// 	if err != nil {
+// 		return err
+// 	}
 
-	sem := make(chan struct{}, 10)
-	wg := sync.WaitGroup{}
-	for _, post := range posts {
-		sem <- struct{}{}
-		wg.Add(1)
+// 	sem := make(chan struct{}, 10)
+// 	wg := sync.WaitGroup{}
+// 	for _, post := range posts {
+// 		sem <- struct{}{}
+// 		wg.Add(1)
 
-		go func(post *db.Post) {
-			defer wg.Done()
-			defer func() {
-				<-sem
-			}()
+// 		go func(post *db.Post) {
+// 			defer wg.Done()
+// 			defer func() {
+// 				<-sem
+// 			}()
 
-			var resp *publisher_pb.PublishNowResponse
-			resp, err := qs.PublisherClient.PublishNow(ctx, &publisher_pb.PublishNowRequest{
-				Id:             post.ID,
-				PublishChannel: post.PublishChannel,
-				Data:           convertPostData(post.Data),
-				PublishAt:      post.PublishAt,
-			})
-			if err != nil {
-				// reschedule if post failed
-				err := qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) error {
-					return qs.DB.RescheduleTx(ctx, tx, &db.RescheduleRequest{
-						ID: post.ID,
-					})
-				})
-				if err != nil {
-					log.Default().Println("reschedule failed")
-				}
+// 			var resp *publisher_pb.PublishNowResponse
+// 			resp, err := qs.PublisherClient.PublishNow(ctx, &publisher_pb.PublishNowRequest{
+// 				Id:             post.ID,
+// 				PublishChannel: post.PublishChannel,
+// 				Data:           convertPostData(post.Data),
+// 				PublishAt:      post.PublishAt,
+// 			})
+// 			if err != nil {
+// 				// reschedule if post failed
+// 				err := qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) error {
+// 					return qs.DB.RescheduleTx(ctx, tx, &db.RescheduleRequest{
+// 						ID: post.ID,
+// 					})
+// 				})
+// 				if err != nil {
+// 					log.Default().Println("reschedule failed")
+// 				}
 
-				log.Default().Println("publish failed")
+// 				log.Default().Println("publish failed")
 
-				return
-			}
+// 				return
+// 			}
 
-			// delete if post ok
-			err = qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) error {
-				return qs.DB.DeletePostByIDTx(ctx, tx, &db.DeletePostRequest{
-					ID: resp.GetId(),
-				})
-			})
-			if err != nil {
-				log.Default().Println("delete failed")
+// 			// delete if post ok
+// 			err = qs.DB.WrapWithTransAction(ctx, func(tx pgx.Tx) error {
+// 				return qs.DB.DeletePostByIDTx(ctx, tx, &db.DeletePostRequest{
+// 					ID: resp.GetId(),
+// 				})
+// 			})
+// 			if err != nil {
+// 				log.Default().Println("delete failed")
 
-				return
-			}
+// 				return
+// 			}
 
-			return
-		}(post)
-	}
+// 			return
+// 		}(post)
+// 	}
 
-	wg.Wait()
+// 	wg.Wait()
 
-	return nil
-}
+// 	return nil
+// }
 
-func convertPostData(data *db.PostData) *publisher_pb.PublishPostData {
-	if data == nil {
-		return nil
-	}
+// func convertPostData(data *db.PostData) *publisher_pb.PublishPostData {
+// 	if data == nil {
+// 		return nil
+// 	}
 
-	return &publisher_pb.PublishPostData{
-		Title: data.Title,
-		Body:  data.Body,
-		// PostUrl: data.PostUrl, когда постим мы не знаем ссылку
-	}
-}
+// 	return &publisher_pb.PublishPostData{
+// 		Title: data.Title,
+// 		Body:  data.Body,
+// 		// PostUrl: data.PostUrl, когда постим мы не знаем ссылку
+// 	}
+// }
