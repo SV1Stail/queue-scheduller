@@ -3,7 +3,7 @@ package db
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"os"
 	"time"
 
 	queue_scheduler_pb "github.com/SV1Stail/tg-project-protos/gen/go/queue_scheduler/queue_scheduler"
@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -20,7 +21,12 @@ type DB struct {
 
 // TODO: add config
 func MustNewDB(ctx context.Context) *DB {
-	config, err := pgxpool.ParseConfig("postgres://postgres:postgres@localhost:5432/queue?sslmode=disable")
+	dsn := os.Getenv("DATABASE_DSN")
+	if dsn == "" {
+		dsn = "postgres://postgres:postgres@localhost:5432/queue?sslmode=disable"
+	}
+
+	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		panic(err)
 	}
@@ -61,19 +67,19 @@ type PostData struct {
 func (db *DB) WrapWithTransAction(ctx context.Context, fn func(tx pgx.Tx) error) error {
 	tx, err := db.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		log.Default().Println("tx begin failed")
+		log.Err(err).Ctx(ctx).Msg("tx begin failed")
 		return err
 	}
 	defer func() {
 		err := tx.Rollback(ctx)
 		if err != nil {
-			log.Default().Println("roll back failed")
+			log.Err(err).Ctx(ctx).Msg("roll back failed")
 		}
 	}()
 
 	err = fn(tx)
 	if err != nil {
-		log.Default().Println("fn failed")
+		log.Err(err).Ctx(ctx).Msg("fn failed")
 		return err
 	}
 
@@ -137,7 +143,7 @@ func (db *DB) GetPost(ctx context.Context, in *GetPostRequest) (*queue_scheduler
 		"id", "publish_channel", "data",
 		"status", "publish_at", "created_at", 
 		"updated_at", "attempts"
-	FROM post
+	FROM posts
 	WHERE "id" = $1
 	`
 	post, err := scanPost(db.pool.QueryRow(ctx, query, in.ID))
@@ -220,57 +226,53 @@ func (db *DB) DeletePostByID(ctx context.Context, in *DeletePostRequest) error {
 	}
 
 	query := `
-	UPDATE post 
+	UPDATE posts 
 	SET 
-		status = 'DONE'
+		status = 'DONE',
 		updated_at = Now()
 	WHERE "id" = $1
 	`
 	_, err := db.pool.Exec(ctx, query, in.ID)
 	if err != nil {
+		log.Err(err).Ctx(ctx).Msg("exec failed")
+
 		return err
 	}
+
+	log.Debug().Ctx(ctx).Msg("mark DONE success")
 
 	return nil
 }
 
-func (db *DB) ClearTx(ctx context.Context, tx pgx.Tx) error {
+func (db *DB) Clear(ctx context.Context) error {
 	query := `
-	WITH deleted AS (
-		DELETE FROM post
-		WHERE status = 'DONE'::text::task_state
-		LIMIT $1
-	)
-	SELECT COUNT(*) AS deleted_count
-	FROM deleted
+		DELETE FROM posts
+		WHERE status = 'DONE'::post_status
 	`
 
-	clearLimit := 100
-	clearedNumber := -1
-
-	row := tx.QueryRow(ctx, query, clearLimit)
-	err := row.Scan(&clearedNumber)
+	_, err := db.pool.Exec(ctx, query)
 	if err != nil {
+		log.Err(err).Ctx(ctx).Msg("clear FAILED")
 		return err
 	}
 
-	log.Default().Printf("cleared number %d", clearedNumber)
+	log.Debug().Ctx(ctx).Msg("clear success")
 
 	return nil
 }
 
-func (db *DB) PublishTx(ctx context.Context, tx pgx.Tx) ([]*Post, error) {
+func (db *DB) Publish(ctx context.Context) ([]*Post, error) {
 	query := `
-	UPDATE post
+	UPDATE posts
 	SET
-		state = 'PUBLISHING'
+		status = 'PUBLISHING',
 		updated_at = Now()
 	WHERE id IN (
 		SELECT id 
-		FROM post
+		FROM posts
 		WHERE
-			state = 'SCHEDULED'  
-			AND run_at < NOW()
+			status = 'SCHEDULED'
+			AND publish_at < NOW()
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
 	)
@@ -279,10 +281,11 @@ func (db *DB) PublishTx(ctx context.Context, tx pgx.Tx) ([]*Post, error) {
 		status, publish_at, created_at,
 		updated_at, attempts
 	`
-	readyLimit := 100
+	readyLimit := 10
 
-	rows, err := tx.Query(ctx, query, readyLimit)
+	rows, err := db.pool.Query(ctx, query, readyLimit)
 	if err != nil {
+		log.Err(err).Ctx(ctx).Msg("Query failed")
 		return nil, err
 	}
 
@@ -291,7 +294,7 @@ func (db *DB) PublishTx(ctx context.Context, tx pgx.Tx) ([]*Post, error) {
 		return nil, err
 	}
 
-	// log.Default().Printf("affected rows %d", ok.RowsAffected())
+	log.Debug().Ctx(ctx).Int("affected rows", len(posts)).Msg("publish success")
 
 	return posts, nil
 }
@@ -349,7 +352,7 @@ func (db *DB) GetPostsForChannelTx(ctx context.Context, tx pgx.Tx, in *GetPostsF
 		"id", "publish_channel", "data",
 		"status", "publish_at", "created_at",
 		"updated_at", "attempts"
-	FROM post
+	FROM posts
 	WHERE "publish_channel" = $1
 	`
 	rows, err := tx.Query(ctx, query, in.PublishChannel)
@@ -369,22 +372,25 @@ type RescheduleRequest struct {
 	ID string
 }
 
-func (db *DB) RescheduleTx(ctx context.Context, tx pgx.Tx, in *RescheduleRequest) error {
+func (db *DB) Reschedule(ctx context.Context, in *RescheduleRequest) error {
 	query := `
-	UPDATE post
+	UPDATE posts
 	SET 
 		status = CASE
 			WHEN attempts >= 3 THEN 'FAILED'
 			ELSE 'SCHEDULED'
 		END,
-		attempts = attempts + 1
+		attempts = attempts + 1,
 		updated_at = Now()
 	WHERE id = $1
 	`
-	_, err := tx.Exec(ctx, query, in.ID)
+	_, err := db.pool.Exec(ctx, query, in.ID)
 	if err != nil {
+		log.Err(err).Ctx(ctx).Msg("Reschedule failed")
 		return err
 	}
+
+	log.Debug().Ctx(ctx).Msg("Reschedule success")
 
 	return nil
 }

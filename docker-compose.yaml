@@ -1,15 +1,84 @@
 services:
-  queue-sheduler:
+  db:
+    image: postgres:17.10-alpine3.23
+    restart: always
+    hostname: db
+    environment:
+      POSTGRES_PASSWORD: "postgres"
+      POSTGRES_DB: "queue"
+    ports:
+      - "5432:5432"
+    volumes:
+      - "postgres_volume:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrator:
     build: 
       context: .
-      dockerfile: build/docker/Dockerfile
-    restart: always
-    ports:
-      - 5090:8090
-    healthcheck:
-      test: ["CMD", "/bin/sh", "-c", "nc 0:8090 </dev/null >/dev/null"]
-      interval: 10s
-      timeout: 30s
-      retries: 5
-      start_period: 5s
+      dockerfile: build/docker/migrate/postgres/Dockerfile
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: queue
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
 
+# прод
+  # queue-sheduler:
+  #   build: 
+  #     context: .
+  #     dockerfile: ./build/docker/Dockerfile
+  #   restart: always
+  #   ports:
+  #     - 5090:8090
+  #   environment:
+    #   DATABASE_DSN: "postgres://postgres:postgres@db:5432/queue?sslmode=disable"
+    # healthcheck:
+    #   test: ["CMD", "nc", "-z", "localhost", "8090"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 5s
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+    #   migrator:
+    #     condition: service_completed_successfully
+
+
+
+# local
+  # queue-sheduler:
+  #   build: 
+  #     context: .
+  #     dockerfile: ./local/docker/Dockerfile
+  #   restart: always
+  #   ports:
+  #     - 5090:8090
+  #   volumes:
+  #     - "./local/bin:/opt/bin"
+  #     - "./local/etc:/opt/etc"
+  #   entrypoint: ["/opt/bin/queue"]
+  #   environment:
+  #     DATABASE_DSN: "postgres://postgres:postgres@db:5432/queue?sslmode=disable"
+  #   healthcheck:
+  #     test: ["CMD", "nc", "-z", "localhost", "8090"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 5s
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #     migrator:
+  #       condition: service_completed_successfully
+
+volumes:
+    postgres_volume:

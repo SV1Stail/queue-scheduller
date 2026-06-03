@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -45,6 +46,7 @@ func scanPosts(rows pgx.Rows) ([]*Post, error) {
 			&post.Attempts,
 		)
 		if err != nil {
+			log.Err(err).Msg("scan failed")
 			return nil, err
 		}
 		post.PublishAt = timestamppb.New(publishAt)
@@ -53,6 +55,7 @@ func scanPosts(rows pgx.Rows) ([]*Post, error) {
 	}
 
 	if err := rows.Err(); err != nil {
+		log.Err(err).Msg("rows error")
 		return nil, err
 	}
 

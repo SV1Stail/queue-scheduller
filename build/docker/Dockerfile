@@ -1,11 +1,11 @@
-FROM golang:1.24.2 AS builder
+FROM golang:1.25.11
 
 WORKDIR /app
 
-ADD ../ ./
+ADD ./ ./
 
 RUN go mod download
 
-RUN go build -o /bin/queue-scheduler /app/cmd/main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -mod vendor -a -o /bin/queue-scheduler /app/cmd/main.go
 
 ENTRYPOINT ["/bin/queue-scheduler"]

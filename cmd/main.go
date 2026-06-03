@@ -4,9 +4,6 @@ import (
 	"context"
 	"log"
 	"net"
-	"os"
-	"os/signal"
-	"syscall"
 
 	"github.com/SV1Stail/queue-scheduller/clients"
 	"github.com/SV1Stail/queue-scheduller/internal/db"
@@ -26,21 +23,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create publisher client: %v", err)
 	}
-	defer publisherClient.Close()
 
 	db := db.MustNewDB(ctx)
-	defer db.Close()
-
 	queueScheduler := app.NewQueueSchedulerService(publisherClient, db)
+	defer queueScheduler.Close()
+
 	queue_scheduler_pb.RegisterQueueschedulerServer(grpcServer, queueScheduler)
 
-	lis, err := net.Listen("tcp", ":50051")
+	lis, err := net.Listen("tcp", ":8091")
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
 	}
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go queueScheduler.Workers(ctx)
 

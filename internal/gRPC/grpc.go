@@ -28,6 +28,14 @@ func NewQueueSchedulerService(publisherClient *clients.PublisherClient, db *db.D
 	}
 }
 
+func (qs *QueueScheduler) Close() {
+	qs.mu.Lock()
+	defer qs.mu.Unlock()
+	qs.PublisherClient.Close()
+	qs.DB.Close()
+	close(qs.stopCh)
+}
+
 func (qs *QueueScheduler) CreatePost(
 	ctx context.Context,
 	req *queue_scheduler_pb.CreatePostRequest,
