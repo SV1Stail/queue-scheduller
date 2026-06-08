@@ -20,8 +20,6 @@ const (
 )
 
 func (qs *QueueScheduler) Workers(ctx context.Context) {
-	// доделать graceful shutdown
-
 	go qs.runJob(ctx, timerTimeout, qs.ClearJob)
 	go qs.runJob(ctx, timerTimeout, qs.ReadyPublish)
 
@@ -36,10 +34,10 @@ func (qs *QueueScheduler) runJob(
 	timer := time.NewTimer(timerDuration)
 
 	method := runtime.FuncForPC(reflect.ValueOf(job).Pointer())
-	log.Info().Ctx(ctx).Str("method_name", method.Name()).Msg("LOL")
 	if method != nil {
 		ctx = context.WithValue(ctx, "method", method.Name())
 	}
+
 mainloop:
 	for {
 		select {

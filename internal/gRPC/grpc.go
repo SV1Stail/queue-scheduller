@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"sync"
 
 	"github.com/SV1Stail/queue-scheduller/clients"
@@ -15,16 +16,23 @@ type QueueScheduler struct {
 	queue_scheduler_pb.UnimplementedQueueschedulerServer
 	PublisherClient *clients.PublisherClient
 	DB              *db.DB
+	Port            string
 	stopCh          chan struct{}
 	mu              *sync.Mutex
 }
 
 func NewQueueSchedulerService(publisherClient *clients.PublisherClient, db *db.DB) *QueueScheduler {
+	port := os.Getenv("GRPC_PORT")
+	if port == "" {
+		port = "8090"
+	}
+
 	return &QueueScheduler{
-		stopCh:          make(chan struct{}),
-		mu:              &sync.Mutex{},
 		PublisherClient: publisherClient,
 		DB:              db,
+		Port:            port,
+		stopCh:          make(chan struct{}),
+		mu:              &sync.Mutex{},
 	}
 }
 

@@ -1,4 +1,4 @@
-# github.com/SV1Stail/tg-project-protos/gen/go v0.0.0-20260602090728-830cbf0d5cb4
+# github.com/SV1Stail/tg-project-protos/gen/go v0.0.0-20260606093011-2c4485b6d7c0
 ## explicit; go 1.25.0
 github.com/SV1Stail/tg-project-protos/gen/go/publisher
 github.com/SV1Stail/tg-project-protos/gen/go/queue_scheduler/queue_scheduler
