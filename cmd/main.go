@@ -11,6 +11,7 @@ import (
 	queue_scheduler_pb "github.com/SV1Stail/tg-project-protos/gen/go/queue_scheduler/queue_scheduler"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/reflection"
 )
 
 func main() {
@@ -29,6 +30,7 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	queue_scheduler_pb.RegisterQueueschedulerServer(grpcServer, queueScheduler)
+	reflection.Register(grpcServer)
 
 	lis, err := net.Listen("tcp", ":"+queueScheduler.Port)
 	if err != nil {

@@ -32,6 +32,16 @@ services:
       db:
         condition: service_healthy
 
+  grpcui:
+    image: fullstorydev/grpcui
+    entrypoint: ["grpcui", "-plaintext", "-bind", "0.0.0.0", "-port", "8080", "queue-sheduler:8090"]
+    ports:
+      - 5092:8080
+    restart: always
+    depends_on:
+      queue-sheduler:
+        condition: service_started
+
 # прод
   # queue-sheduler:
   #   build: 
@@ -39,7 +49,8 @@ services:
   #     dockerfile: ./build/docker/Dockerfile
   #   restart: always
   #   ports:
-  #     - 5090:8090
+      # - 5090:8090
+      # - 5091:8080 # HTTP
   #   environment:
       # DATABASE_DSN: "postgres://postgres:postgres@container_name:5432/queue?sslmode=disable"
       # GRPC_PORT: "8090"
@@ -65,7 +76,8 @@ services:
       dockerfile: ./local/docker/Dockerfile
     restart: always
     ports:
-      - 5090:8090
+      - 5090:8090 # gRPC
+      - 5091:8080 # HTTP
     volumes:
       - "./local/bin:/opt/bin"
       - "./local/etc:/opt/etc"

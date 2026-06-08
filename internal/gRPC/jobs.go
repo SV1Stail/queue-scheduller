@@ -44,7 +44,7 @@ mainloop:
 		case <-qs.stopCh:
 			break mainloop
 		case <-ctx.Done():
-			log.Err(ctx.Err()).Ctx(ctx).Msg("context done")
+			log.Err(ctx.Err()).Ctx(ctx).Str("method", method.Name()).Msg("context done")
 			break mainloop
 		case <-timer.C:
 			func() {
@@ -58,11 +58,12 @@ mainloop:
 					var panicErr safe.PanicError
 					if errors.As(err, &panicErr) {
 						log.Err(err).Ctx(ctx).
+							Str("method", method.Name()).
 							Interface("panic_value", panicErr.Panic()).
 							Interface("stack", panicErr.StackTrace()).
 							Msg("job panicked")
 					}
-					log.Err(err).Ctx(ctx).Msg("job failed")
+					log.Err(err).Ctx(ctx).Str("method", method.Name()).Msg("job failed")
 				}
 			}()
 
