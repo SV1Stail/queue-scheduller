@@ -1,0 +1,106 @@
+services:
+  db:
+    container_name: db-queue-scheduler
+    image: postgres:17.10-alpine3.23
+    restart: always
+    hostname: db
+    environment:
+      POSTGRES_PASSWORD: "postgres"
+      POSTGRES_DB: "queue"
+    ports:
+      - "5432:5432"
+    volumes:
+      - "postgres_volume:/var/lib/postgresql/data"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrator:
+    container_name: migrator-queue-scheduler
+    build: 
+      context: .
+      dockerfile: build/docker/migrate/postgres/Dockerfile
+    environment:
+      POSTGRES_HOST: db-queue-scheduler
+      POSTGRES_DB: queue
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_PORT: 5432
+    depends_on:
+      db:
+        condition: service_healthy
+
+  grpcui:
+    image: fullstorydev/grpcui
+    entrypoint: ["grpcui", "-plaintext", "-bind", "0.0.0.0", "-port", "8080", "queue-scheduler:8090"]
+    ports:
+      - 5092:8080
+    restart: always
+    depends_on:
+      queue-scheduler:
+        condition: service_started
+
+# прод
+  # queue-scheduler:
+  #   build: 
+  #     context: .
+  #     dockerfile: ./build/docker/Dockerfile
+  #   restart: always
+  #   ports:
+      # - 5090:8090
+      # - 5091:8080 # HTTP
+  #   environment:
+      # DATABASE_DSN: "postgres://postgres:postgres@container_name:5432/queue?sslmode=disable"
+      # GRPC_PORT: "8090"
+    # healthcheck:
+    #   test: ["CMD", "nc", "-z", "localhost", "8090"]
+    #   interval: 10s
+    #   timeout: 5s
+    #   retries: 5
+    #   start_period: 5s
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+    #   migrator:
+    #     condition: service_completed_successfully
+
+
+
+# local
+  queue-scheduler:
+    container_name: queue-scheduler
+    build: 
+      context: .
+      dockerfile: ./local/docker/Dockerfile
+    restart: always
+    ports:
+      - 5090:8090 # gRPC
+      - 5091:8080 # HTTP
+    volumes:
+      - "./local/bin:/opt/bin"
+      - "./local/etc:/opt/etc"
+    entrypoint: ["/opt/bin/queue"]
+    environment:
+      DATABASE_DSN: "postgres://postgres:postgres@db-queue-scheduler:5432/queue?sslmode=disable"
+      GRPC_PORT: "8090"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "8090"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    depends_on:
+      db:
+        condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+
+volumes:
+    postgres_volume:
+
+networks:
+  default:
+    name: shared-net
+    external: true

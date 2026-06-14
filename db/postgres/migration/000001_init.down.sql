@@ -1,0 +1,3 @@
+DROP INDEX IF EXISTS idx_posts_channel;
+DROP TABLE IF EXISTS posts;
+DROP TYPE IF EXISTS post_status;
