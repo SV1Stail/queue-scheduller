@@ -121,7 +121,7 @@ func (qs *QueueScheduler) ReadyPublish(ctx context.Context) error {
 		})
 	}
 
-	return nil
+	return g.Wait()
 }
 
 func convertPostData(data *db.PostData) *publisher_pb.PublishPostData {

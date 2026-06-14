@@ -34,16 +34,16 @@ services:
 
   grpcui:
     image: fullstorydev/grpcui
-    entrypoint: ["grpcui", "-plaintext", "-bind", "0.0.0.0", "-port", "8080", "queue-sheduler:8090"]
+    entrypoint: ["grpcui", "-plaintext", "-bind", "0.0.0.0", "-port", "8080", "queue-scheduler:8090"]
     ports:
       - 5092:8080
     restart: always
     depends_on:
-      queue-sheduler:
+      queue-scheduler:
         condition: service_started
 
 # прод
-  # queue-sheduler:
+  # queue-scheduler:
   #   build: 
   #     context: .
   #     dockerfile: ./build/docker/Dockerfile
@@ -69,7 +69,7 @@ services:
 
 
 # local
-  queue-sheduler:
+  queue-scheduler:
     container_name: queue-scheduler
     build: 
       context: .
